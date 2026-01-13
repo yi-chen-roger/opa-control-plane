@@ -38,18 +38,42 @@ func init() {
 // Synchronizer manages the synchronization of a Git repository to the local filesystem.
 // It handles cloning, fetching, and checking out specific references or commits.
 type Synchronizer struct {
-	path       string
-	config     config.Git
-	gh         github
-	sourceName string
+	path           string
+	config         config.Git
+	gh             github
+	sourceName     string
+	secretProvider SecretProvider
 }
 
 // New creates a new Synchronizer instance. It is expected the threadpooling is outside of this package.
 // The synchronizer does not validate the path holds the same repository as the config. Therefore, the caller
 // should guarantee that the path is unique for each repository and that the path is not used by multiple
 // Synchronizer instances. If the path does not exist, it will be created.
+//
+// Secrets are resolved from the configuration file. For external secret management backends,
+// use NewWithSecretProvider instead.
 func New(path string, config config.Git, sourceName string) *Synchronizer {
-	return &Synchronizer{path: path, config: config, sourceName: sourceName}
+	return NewWithSecretProvider(path, config, sourceName, nil)
+}
+
+// NewWithSecretProvider creates a new Synchronizer instance with a custom SecretProvider.
+// This allows external projects to integrate with their own secret management systems
+// (e.g., HashiCorp Vault, AWS Secrets Manager, etc.) instead of using config-file based secrets.
+//
+// If provider is nil, the default config-based secret resolution will be used.
+//
+// Example usage with a custom provider:
+//
+//	provider := myorg.NewVaultSecretProvider(vaultClient)
+//	syncer := gitsync.NewWithSecretProvider(path, config, sourceName, provider)
+//	err := syncer.Execute(ctx)
+func NewWithSecretProvider(path string, config config.Git, sourceName string, provider SecretProvider) *Synchronizer {
+	return &Synchronizer{
+		path:           path,
+		config:         config,
+		sourceName:     sourceName,
+		secretProvider: provider,
+	}
 }
 
 // Execute performs the synchronization of the configured Git repository. If the repository does not exist

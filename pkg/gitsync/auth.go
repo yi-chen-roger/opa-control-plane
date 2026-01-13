@@ -27,9 +27,26 @@ func (s *Synchronizer) auth(ctx context.Context) (transport.AuthMethod, error) {
 		return nil, nil
 	}
 
-	value, err := s.config.Credentials.Resolve(ctx)
-	if err != nil {
-		return nil, err
+	var value any
+	var err error
+
+	// Use SecretProvider if available, otherwise fall back to config-based resolution
+	if s.secretProvider != nil {
+		var secret *config.Secret
+		secret, err = s.secretProvider.GetSecret(ctx, s.config.Credentials.Name)
+		if err != nil {
+			return nil, err
+		}
+		value, err = secret.Typed(ctx)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Backward compatibility: use config-based resolution
+		value, err = s.config.Credentials.Resolve(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	switch value := value.(type) {
