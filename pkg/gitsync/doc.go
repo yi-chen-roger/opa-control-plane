@@ -16,7 +16,7 @@
 // Example usage with config-based secrets:
 //
 //	import "github.com/open-policy-agent/opa-control-plane/pkg/gitsync"
-//	import "github.com/open-policy-agent/opa-control-plane/internal/config"
+//	import "github.com/open-policy-agent/opa-control-plane/pkg/config"
 //
 //	gitConfig := config.Git{
 //	    Repo:      "https://github.com/myorg/policies.git",

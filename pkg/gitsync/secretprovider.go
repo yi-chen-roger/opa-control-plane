@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/open-policy-agent/opa-control-plane/internal/config"
+	"github.com/open-policy-agent/opa-control-plane/pkg/config"
 )
 
 // SecretProvider abstracts the source of secrets, allowing external projects

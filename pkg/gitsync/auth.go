@@ -17,7 +17,7 @@ import (
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/open-policy-agent/opa-control-plane/internal/config"
+	"github.com/open-policy-agent/opa-control-plane/pkg/config"
 )
 
 // auth returns the appropriate authentication method for the configured credentials.
