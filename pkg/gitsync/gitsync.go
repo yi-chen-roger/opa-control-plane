@@ -18,8 +18,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
+	"github.com/open-policy-agent/opa-control-plane/internal/config"
 	"github.com/open-policy-agent/opa-control-plane/internal/metrics"
-	"github.com/open-policy-agent/opa-control-plane/pkg/config"
 )
 
 // configFile is an internal config file used to track if a git repository
@@ -45,35 +45,56 @@ type Synchronizer struct {
 	secretProvider SecretProvider
 }
 
-// New creates a new Synchronizer instance. It is expected the threadpooling is outside of this package.
-// The synchronizer does not validate the path holds the same repository as the config. Therefore, the caller
-// should guarantee that the path is unique for each repository and that the path is not used by multiple
-// Synchronizer instances. If the path does not exist, it will be created.
+// New creates a new Synchronizer instance for internal use with config.Git.
+// This constructor is used by the OPA Control Plane service layer.
+// External users should use NewFromGitConfig instead.
 //
-// Secrets are resolved from the configuration file. For external secret management backends,
-// use NewWithSecretProvider instead.
-func New(path string, config config.Git, sourceName string) *Synchronizer {
-	return NewWithSecretProvider(path, config, sourceName, nil)
-}
-
-// NewWithSecretProvider creates a new Synchronizer instance with a custom SecretProvider.
-// This allows external projects to integrate with their own secret management systems
-// (e.g., HashiCorp Vault, AWS Secrets Manager, etc.) instead of using config-file based secrets.
+// The synchronizer does not validate the path holds the same repository as the config.
+// Therefore, the caller should guarantee that the path is unique for each repository and
+// that the path is not used by multiple Synchronizer instances. If the path does not exist,
+// it will be created.
 //
-// If provider is nil, the default config-based secret resolution will be used.
-//
-// Example usage with a custom provider:
-//
-//	provider := myorg.NewVaultSecretProvider(vaultClient)
-//	syncer := gitsync.NewWithSecretProvider(path, config, sourceName, provider)
-//	err := syncer.Execute(ctx)
-func NewWithSecretProvider(path string, config config.Git, sourceName string, provider SecretProvider) *Synchronizer {
+// If provider is nil, secrets are resolved from the configuration file.
+// For external secret management backends, provide a custom SecretProvider.
+func New(path string, config config.Git, sourceName string, provider SecretProvider) *Synchronizer {
 	return &Synchronizer{
 		path:           path,
 		config:         config,
 		sourceName:     sourceName,
 		secretProvider: provider,
 	}
+}
+
+// NewFromGitConfig creates a new Synchronizer instance for external users using GitConfig.
+// This is the recommended constructor for external projects integrating with this package.
+//
+// The secretProvider is required for external users to provide credentials. The provider
+// will be called with the credential name from GitConfig to retrieve the actual credentials.
+//
+// Example usage:
+//
+//	gitCfg := &gitsync.GitConfig{
+//	    Repo:           "https://github.com/myorg/policies.git",
+//	    Reference:      ptr("main"),
+//	    CredentialName: ptr("github-token"),
+//	}
+//	provider := myorg.NewVaultSecretProvider(vaultClient)
+//	syncer := gitsync.NewFromGitConfig("/path/to/clone", gitCfg, "my-source", provider)
+//	err := syncer.Execute(ctx)
+func NewFromGitConfig(path string, gitConfig *GitConfig, sourceName string, provider SecretProvider) *Synchronizer {
+	cfg := config.Git{
+		Repo:      gitConfig.Repo,
+		Reference: gitConfig.Reference,
+		Commit:    gitConfig.Commit,
+	}
+
+	if gitConfig.CredentialName != nil {
+		cfg.Credentials = &config.SecretRef{
+			Name: *gitConfig.CredentialName,
+		}
+	}
+
+	return New(path, cfg, sourceName, provider)
 }
 
 // Execute performs the synchronization of the configured Git repository. If the repository does not exist
@@ -212,4 +233,57 @@ func (s *Synchronizer) execute(ctx context.Context) (bool, error) {
 // Close closes the synchronizer and releases any resources.
 func (*Synchronizer) Close(context.Context) {
 	// No resources to close.
+}
+
+// resolveConfigCredentials adapts internal config types to external gitsync types for backward compatibility.
+// This is used when SecretProvider is not configured and we fall back to config-based secret resolution.
+func (s *Synchronizer) resolveConfigCredentials(ctx context.Context) (any, error) {
+	if s.config.Credentials == nil {
+		return nil, nil
+	}
+
+	value, err := s.config.Credentials.Resolve(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert internal config types to external gitsync types
+	switch v := value.(type) {
+	case *config.SecretBasicAuth:
+		return &SecretBasicAuth{
+			Username: v.Username,
+			Password: v.Password,
+			Headers:  v.Headers,
+		}, nil
+
+	case config.SecretGitHubApp:
+		return &SecretGitHubApp{
+			IntegrationID:  v.IntegrationID,
+			InstallationID: v.InstallationID,
+			PrivateKey:     v.PrivateKey,
+		}, nil
+
+	case config.SecretSSHKey:
+		return &SecretSSHKey{
+			Key:          v.Key,
+			Passphrase:   v.Passphrase,
+			Fingerprints: v.Fingerprints,
+		}, nil
+
+	case *config.SecretOIDCClientCredentials:
+		return &SecretOIDCClientCredentials{
+			Issuer:       v.Issuer,
+			TokenURL:     v.TokenURL,
+			ClientID:     v.ClientID,
+			ClientSecret: v.ClientSecret,
+			Scopes:       v.Scopes,
+		}, nil
+
+	case *config.SecretTokenAuth:
+		return &SecretTokenAuth{
+			BearerToken: v.BearerToken,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("unsupported config credential type: %T", value)
 }

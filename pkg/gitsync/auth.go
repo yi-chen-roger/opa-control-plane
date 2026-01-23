@@ -16,8 +16,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"golang.org/x/crypto/ssh"
-
-	"github.com/open-policy-agent/opa-control-plane/pkg/config"
 )
 
 // auth returns the appropriate authentication method for the configured credentials.
@@ -32,7 +30,7 @@ func (s *Synchronizer) auth(ctx context.Context) (transport.AuthMethod, error) {
 
 	// Use SecretProvider if available, otherwise fall back to config-based resolution
 	if s.secretProvider != nil {
-		var secret *config.Secret
+		var secret Secret
 		secret, err = s.secretProvider.GetSecret(ctx, s.config.Credentials.Name)
 		if err != nil {
 			return nil, err
@@ -43,21 +41,22 @@ func (s *Synchronizer) auth(ctx context.Context) (transport.AuthMethod, error) {
 		}
 	} else {
 		// Backward compatibility: use config-based resolution
-		value, err = s.config.Credentials.Resolve(ctx)
+		// This returns internal config types which need to be adapted
+		value, err = s.resolveConfigCredentials(ctx)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	switch value := value.(type) {
-	case *config.SecretBasicAuth:
+	case *SecretBasicAuth:
 		return &basicAuth{
 			Username: value.Username,
 			Password: value.Password,
 			Headers:  value.Headers,
 		}, nil
 
-	case config.SecretGitHubApp:
+	case *SecretGitHubApp:
 		token, err := s.gh.Token(ctx, value.IntegrationID, value.InstallationID, value.PrivateKey)
 		if err != nil {
 			return nil, err
@@ -65,17 +64,17 @@ func (s *Synchronizer) auth(ctx context.Context) (transport.AuthMethod, error) {
 
 		return &http.BasicAuth{Username: "x-access-token", Password: token}, nil
 
-	case config.SecretSSHKey:
+	case *SecretSSHKey:
 		return newSSHAuth(value.Key, value.Passphrase, value.Fingerprints)
 
-	case *config.SecretOIDCClientCredentials:
+	case *SecretOIDCClientCredentials:
 		// Use the TokenSecret interface for OAuth2 token-based authentication
 		return &tokenAuth{
 			tokenSecret: value,
 			name:        "oidc-client-credentials",
 		}, nil
 
-	case *config.SecretTokenAuth:
+	case *SecretTokenAuth:
 		// Use the TokenSecret interface for static token-based authentication
 		return &tokenAuth{
 			tokenSecret: value,
@@ -213,7 +212,7 @@ func (a *basicAuth) SetAuth(r *gohttp.Request) {
 // tokenAuth provides HTTP bearer token authentication using any TokenSecret.
 // It works with both static tokens and dynamic tokens (like OIDC client credentials).
 type tokenAuth struct {
-	tokenSecret config.TokenSecret
+	tokenSecret TokenSecret
 	name        string
 }
 

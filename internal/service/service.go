@@ -475,7 +475,7 @@ func (src *source) SyncGit(syncs *[]Synchronizer, sourceName string, git config.
 		if reqCommit != "" {
 			git.Commit = &reqCommit
 		}
-		*syncs = append(*syncs, gitsync.New(repoDir, git, sourceName))
+		*syncs = append(*syncs, gitsync.New(repoDir, git, sourceName, nil))
 	}
 
 	return src

@@ -699,6 +699,98 @@ func (s *Selector) init() {
 	}
 }
 
+type StringSet []string
+
+func (a StringSet) Equal(b StringSet) bool {
+	return setEqual(a, b, func(s string) string { return s }, func(a, b string) bool { return a == b })
+}
+
+func (a StringSet) Add(value string) StringSet {
+	i := sort.Search(len(a), func(i int) bool { return a[i] >= value })
+	if i < len(a) && a[i] == value {
+		return a
+	}
+
+	return slices.Insert(a, i, value)
+}
+
+// Git defines the Git synchronization configuration used by OPA Control Plane Sources.
+type Git struct {
+	Repo          string     `json:"repo"`
+	Reference     *string    `json:"reference,omitempty"`
+	Commit        *string    `json:"commit,omitempty"`
+	Path          *string    `json:"path,omitempty"`
+	IncludedFiles StringSet  `json:"included_files,omitempty"`
+	ExcludedFiles StringSet  `json:"excluded_files,omitempty"`
+	Credentials   *SecretRef `json:"credentials,omitempty"` // If nil, use the default SSH authentication mechanisms available
+	// or no authentication for public repos. Note, JSON schema validation overrides this to string type.
+
+	_ struct{} `additionalProperties:"false"`
+}
+
+func (g *Git) Equal(other *Git) bool {
+	return fastEqual(g, other, func(g, other *Git) bool {
+		return ptrEqual(g.Reference, other.Reference) &&
+			ptrEqual(g.Commit, other.Commit) &&
+			ptrEqual(g.Path, other.Path) &&
+			g.Credentials.Equal(other.Credentials) &&
+			g.IncludedFiles.Equal(other.IncludedFiles) &&
+			g.ExcludedFiles.Equal(other.ExcludedFiles)
+	})
+}
+
+type SecretRef struct {
+	Name  string `json:"-"`
+	value *Secret
+}
+
+// Resolve retrieves the secret value from the secret store. If the secret is not found, an error is returned.
+// If the secret is found, it returns the value as an interface{} which can be further typed as needed.
+func (s *SecretRef) Resolve(ctx context.Context) (any, error) {
+	if s.value == nil {
+		return nil, fmt.Errorf("secret %q not found", s.Name)
+	}
+
+	return s.value.Typed(ctx)
+}
+
+func (s *SecretRef) MarshalYAML() (any, error) {
+	if s.Name == "" {
+		return nil, nil
+	}
+	return s.Name, nil
+}
+
+func (s *SecretRef) MarshalJSON() ([]byte, error) {
+	v, err := s.MarshalYAML()
+	if err != nil {
+		return nil, err
+	}
+
+	return json.Marshal(v)
+}
+
+func (s *SecretRef) UnmarshalYAML(bs []byte) error {
+	if err := yaml.Unmarshal(bs, &s.Name); err != nil {
+		return fmt.Errorf("expected scalar node: %w", err)
+	}
+	return nil
+}
+
+func (s *SecretRef) UnmarshalJSON(bs []byte) error {
+	if err := json.Unmarshal(bs, &s.Name); err != nil {
+		return fmt.Errorf("failed to unmarshal SecretRef: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SecretRef) Equal(other *SecretRef) bool {
+	return fastEqual(s, other, func(s, other *SecretRef) bool {
+		return s.Name == other.Name && s.value.Equal(other.value)
+	})
+}
+
 // Token represents an API token to access the OPA Control Plane APIs.
 type Token struct {
 	Name   string  `json:"-"`

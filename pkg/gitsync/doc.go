@@ -13,63 +13,73 @@
 //
 // # Basic Usage
 //
-// Example usage with config-based secrets:
+// For external users, use GitConfig with an optional SecretProvider:
 //
 //	import "github.com/open-policy-agent/opa-control-plane/pkg/gitsync"
-//	import "github.com/open-policy-agent/opa-control-plane/pkg/config"
 //
-//	gitConfig := config.Git{
-//	    Repo:      "https://github.com/myorg/policies.git",
-//	    Reference: ptr("main"),
-//	    Credentials: &config.SecretRef{
-//	        Name: "github-token",
-//	        // ... credential configuration
-//	    },
+//	ref := "main"
+//	credName := "github-token"
+//	gitConfig := &gitsync.GitConfig{
+//	    Repo:           "https://github.com/myorg/policies.git",
+//	    Reference:      &ref,
+//	    CredentialName: &credName,
 //	}
 //
-//	syncer := gitsync.New("/path/to/clone", gitConfig, "my-source")
+//	// provider implements gitsync.SecretProvider for fetching credentials
+//	syncer := gitsync.NewFromGitConfig("/path/to/clone", gitConfig, "my-source", provider)
 //	err := syncer.Execute(ctx)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //	defer syncer.Close(ctx)
 //
+// For simple cases without credentials (public repos), pass nil as the provider:
+//
+//	gitConfig := &gitsync.GitConfig{
+//	    Repo:      "https://github.com/myorg/public-policies.git",
+//	    Reference: &ref,
+//	}
+//	syncer := gitsync.NewFromGitConfig("/path/to/clone", gitConfig, "my-source", nil)
+//
 // # External Secret Management
 //
-// By default, gitsync reads secrets from the configuration file. External projects
-// can integrate with their own secret management systems (HashiCorp Vault, AWS Secrets
-// Manager, etc.) by implementing the SecretProvider interface:
+// External projects can integrate with their own secret management systems
+// (HashiCorp Vault, AWS Secrets Manager, etc.) by implementing the SecretProvider interface:
 //
 //	type MySecretProvider struct {
 //	    client *vault.Client
 //	}
 //
-//	func (p *MySecretProvider) GetSecret(ctx context.Context, name string) (*config.Secret, error) {
+//	func (p *MySecretProvider) GetSecret(ctx context.Context, name string) (gitsync.Secret, error) {
 //	    // Fetch secret from Vault
 //	    vaultSecret, err := p.client.Logical().Read("secret/data/" + name)
 //	    if err != nil {
 //	        return nil, err
 //	    }
 //
-//	    // Convert to OCP Secret format
-//	    secret := &config.Secret{
-//	        Type: "github_app_auth",
-//	        Value: map[string]any{
-//	            "type": "github_app_auth",
-//	            "integration_id": vaultSecret.Data["integration_id"],
-//	            "installation_id": vaultSecret.Data["installation_id"],
-//	            "private_key": vaultSecret.Data["private_key"],
-//	        },
-//	    }
-//	    return secret, nil
+//	    // Return a gitsync.Secret implementation that provides the credential
+//	    return &myVaultSecret{data: vaultSecret.Data}, nil
 //	}
 //
-//	// Use custom provider
+//	type myVaultSecret struct {
+//	    data map[string]interface{}
+//	}
+//
+//	func (s *myVaultSecret) Typed(ctx context.Context) (any, error) {
+//	    // Convert Vault data to gitsync credential types
+//	    return &gitsync.SecretGitHubApp{
+//	        IntegrationID:  s.data["integration_id"].(int64),
+//	        InstallationID: s.data["installation_id"].(int64),
+//	        PrivateKey:     s.data["private_key"].(string),
+//	    }, nil
+//	}
+//
+//	// Use custom provider with NewFromGitConfig
 //	provider := &MySecretProvider{client: vaultClient}
-//	syncer := gitsync.NewWithSecretProvider(path, gitConfig, sourceName, provider)
+//	syncer := gitsync.NewFromGitConfig(path, gitConfig, sourceName, provider)
 //	err := syncer.Execute(ctx)
 //
-// This allows organizations to:
+// This allows:
 //   - Centralize secret management across all services
 //   - Enforce security policies and access controls
 //   - Rotate credentials without modifying configuration files
