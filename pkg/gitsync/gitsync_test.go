@@ -12,14 +12,51 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/open-policy-agent/opa-control-plane/internal/config"
-	"github.com/open-policy-agent/opa-control-plane/internal/gitsync"
+	"github.com/open-policy-agent/opa-control-plane/pkg/gitsync"
 	"golang.org/x/crypto/ssh"
 )
+
+// testSecretProvider is a simple in-memory secret provider for testing.
+type testSecretProvider struct {
+	mu      sync.RWMutex
+	secrets map[string]gitsync.Secret
+}
+
+func newTestSecretProvider() *testSecretProvider {
+	return &testSecretProvider{
+		secrets: make(map[string]gitsync.Secret),
+	}
+}
+
+func (p *testSecretProvider) AddSecret(name string, secret gitsync.Secret) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.secrets[name] = secret
+}
+
+func (p *testSecretProvider) GetSecret(ctx context.Context, name string) (gitsync.Secret, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	secret, ok := p.secrets[name]
+	if !ok {
+		return nil, fmt.Errorf("secret %q not found", name)
+	}
+	return secret, nil
+}
+
+// testSecret wraps a typed secret value.
+type testSecret struct {
+	value any
+}
+
+func (s *testSecret) Typed(ctx context.Context) (any, error) {
+	return s.value, nil
+}
 
 // TestGitsyncLocal tests the functionality of the gitsync package by creating a temporary git repository on disk.
 // committing a file, cloning it to a new location using the gitsync, and verifying that the cloned repository contains the expected content.
@@ -56,11 +93,10 @@ func TestGitsyncLocal(t *testing.T) {
 	clonedRepositoryPath := t.TempDir() + "/test-repo"
 
 	ref := "refs/heads/master"
-	s := gitsync.New(clonedRepositoryPath, config.Git{
+	s := gitsync.NewFromGitConfig(clonedRepositoryPath, &gitsync.GitConfig{
 		Repo:      testRepositoryPath,
 		Reference: &ref,
-		Commit:    nil,
-	}, "")
+	}, "", nil)
 
 	ctx := t.Context()
 	if err := s.Execute(ctx); err != nil {
@@ -199,28 +235,14 @@ func TestGitsyncSSH(t *testing.T) {
 		t.Fatalf("expected no error while encrypting PEM block: %v", err)
 	}
 
-	secret := config.SecretSSHKey{
+	secret := &gitsync.SecretSSHKey{
 		Key:          string(pem.EncodeToMemory(block)),
 		Passphrase:   passphrase,
 		Fingerprints: []string{srv.Fingerprint()},
 	}
 
-	bs, err := json.Marshal(secret)
-	if err != nil {
-		t.Fatalf("expected no error while marshaling secret: %v", err)
-	}
-
-	var value map[string]any
-	if err := json.Unmarshal(bs, &value); err != nil {
-		t.Fatalf("expected no error while unmarshaling secret: %v", err)
-	}
-
-	value["type"] = "ssh_key"
-
-	secret2 := config.Secret{
-		Name:  "ssh",
-		Value: value,
-	}
+	provider := newTestSecretProvider()
+	provider.AddSecret("ssh", &testSecret{value: secret})
 
 	t.Run("clone remote branch", func(t *testing.T) {
 		// Create a new synchronizer with the SSH repository URL and the secret.
@@ -230,11 +252,12 @@ func TestGitsyncSSH(t *testing.T) {
 		t.Cleanup(srv.ResetFetches)
 
 		ref := "refs/heads/master"
-		s := gitsync.New(clonedRepositoryPath, config.Git{
-			Repo:        repoURL,
-			Reference:   &ref,
-			Credentials: secret2.Ref(),
-		}, "")
+		credName := "ssh"
+		s := gitsync.NewFromGitConfig(clonedRepositoryPath, &gitsync.GitConfig{
+			Repo:           repoURL,
+			Reference:      &ref,
+			CredentialName: &credName,
+		}, "", provider)
 
 		if err := s.Execute(t.Context()); err != nil {
 			t.Fatalf("expected no error, got %v", err)
@@ -262,11 +285,12 @@ func TestGitsyncSSH(t *testing.T) {
 		t.Cleanup(srv.ResetFetches)
 
 		ref := commitHash.String()
-		s := gitsync.New(clonedRepositoryPath, config.Git{
-			Repo:        repoURL,
-			Commit:      &ref,
-			Credentials: secret2.Ref(),
-		}, "")
+		credName := "ssh"
+		s := gitsync.NewFromGitConfig(clonedRepositoryPath, &gitsync.GitConfig{
+			Repo:           repoURL,
+			Commit:         &ref,
+			CredentialName: &credName,
+		}, "", provider)
 
 		if err := s.Execute(t.Context()); err != nil {
 			t.Fatalf("expected no error, got %v", err)
@@ -333,26 +357,24 @@ func TestGitsync_TokenBasedAuth(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		secretConfig   map[string]any
+		secretValue    any
 		setupOIDC      func() (*httptest.Server, func())
 		expectedPrefix string
 	}{
 		{
 			name: "static_token_auth",
-			secretConfig: map[string]any{
-				"type":  "token_auth",
-				"token": "static_bearer_token_123",
+			secretValue: &gitsync.SecretTokenAuth{
+				BearerToken: "static_bearer_token_123",
 			},
 			expectedPrefix: "static_bearer_token_123",
 		},
 		{
 			name: "oidc_with_token_endpoint",
-			secretConfig: map[string]any{
-				"type":           "oidc_client_credentials",
-				"token_endpoint": "", // Set dynamically
-				"client_id":      "test_client",
-				"client_secret":  "test_secret",
-				"scopes":         []string{"git", "repo"},
+			secretValue: &gitsync.SecretOIDCClientCredentials{
+				TokenURL:     "", // Set dynamically
+				ClientID:     "test_client",
+				ClientSecret: "test_secret",
+				Scopes:       []string{"git", "repo"},
 			},
 			setupOIDC: func() (*httptest.Server, func()) {
 				server := mockOIDCProvider("test_client", "test_secret")
@@ -362,12 +384,11 @@ func TestGitsync_TokenBasedAuth(t *testing.T) {
 		},
 		{
 			name: "oidc_with_issuer",
-			secretConfig: map[string]any{
-				"type":          "oidc_client_credentials",
-				"issuer":        "", // Set dynamically
-				"client_id":     "test_client",
-				"client_secret": "test_secret",
-				"scopes":        []string{"git", "repo"},
+			secretValue: &gitsync.SecretOIDCClientCredentials{
+				Issuer:       "", // Set dynamically
+				ClientID:     "test_client",
+				ClientSecret: "test_secret",
+				Scopes:       []string{"git", "repo"},
 			},
 			setupOIDC: func() (*httptest.Server, func()) {
 				server := mockOIDCProvider("test_client", "test_secret")
@@ -384,39 +405,34 @@ func TestGitsync_TokenBasedAuth(t *testing.T) {
 				oidcServer, cleanup := tt.setupOIDC()
 				t.Cleanup(cleanup)
 
-				if tt.secretConfig["token_endpoint"] == "" {
-					tt.secretConfig["issuer"] = oidcServer.URL
-				} else {
-					tt.secretConfig["token_endpoint"] = oidcServer.URL + "/token"
+				// Update the secret value based on OIDC server
+				switch v := tt.secretValue.(type) {
+				case *gitsync.SecretOIDCClientCredentials:
+					if v.TokenURL == "" {
+						v.Issuer = oidcServer.URL
+					} else {
+						v.TokenURL = oidcServer.URL + "/token"
+					}
 				}
 			}
 
-			secret := config.Secret{
-				Name:  "test_secret",
-				Value: tt.secretConfig,
-			}
-
 			// Test token retrieval
-			token := testTokenRetrieval(t, &secret, tt.expectedPrefix)
+			token := testTokenRetrieval(t, tt.secretValue, tt.expectedPrefix)
 			t.Logf("Got token: %s", token)
 		})
 	}
 }
 
 // testTokenRetrieval tests that tokens can be retrieved from secrets
-func testTokenRetrieval(t *testing.T, secret *config.Secret, expectedPrefix string) string {
+func testTokenRetrieval(t *testing.T, secretValue any, expectedPrefix string) string {
 	ctx := context.Background()
 
-	resolved, err := secret.Ref().Resolve(ctx)
-	if err != nil {
-		t.Fatalf("failed to resolve secret: %v", err)
-	}
-
 	var token string
-	switch v := resolved.(type) {
-	case *config.SecretTokenAuth:
+	var err error
+	switch v := secretValue.(type) {
+	case *gitsync.SecretTokenAuth:
 		token, err = v.Token(ctx)
-	case *config.SecretOIDCClientCredentials:
+	case *gitsync.SecretOIDCClientCredentials:
 		token, err = v.Token(ctx)
 	default:
 		t.Fatalf("unexpected secret type: %T", v)
