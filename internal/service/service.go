@@ -371,7 +371,7 @@ func (s *Service) launchWorkers(ctx context.Context) {
 					SyncGit(&syncs, dep.Name, dep.Git, join(srcDir, "repo"), overrides[dep.Name]).
 					AddRequirements(dep.Requirements)
 
-				sources = append(sources, &src.Source)
+				sources = append(sources, src.toBuilderSource())
 			}
 
 			storage, err := s3.New(ctx, b.ObjectStorage)
