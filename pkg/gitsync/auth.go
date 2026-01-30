@@ -19,7 +19,7 @@ import (
 )
 
 // auth returns the appropriate authentication method for the configured credentials.
-func (s *Synchronizer) auth(ctx context.Context) (transport.AuthMethod, error) {
+func (s *defaultSynchronizer) auth(ctx context.Context) (transport.AuthMethod, error) {
 
 	if s.config.Credentials == nil {
 		return nil, nil

@@ -35,9 +35,33 @@ func init() {
 	}
 }
 
-// Synchronizer manages the synchronization of a Git repository to the local filesystem.
-// It handles cloning, fetching, and checking out specific references or commits.
-type Synchronizer struct {
+// Synchronizer defines the interface for git repository synchronization.
+// It provides a contract for maintaining local filesystem copies of git repositories.
+//
+// Implementations must handle:
+//   - Initial repository cloning
+//   - Fetching updates from remote
+//   - Checking out specific references or commits
+//   - Managing authentication
+//
+// The synchronizer is not thread-safe. Callers should handle concurrency.
+type Synchronizer interface {
+	// Execute performs the synchronization of the configured Git repository.
+	// If the repository does not exist on disk, it will be cloned.
+	// If it exists, it will fetch the latest changes and checkout the configured reference/commit.
+	//
+	// Returns an error if synchronization fails.
+	Execute(ctx context.Context) error
+
+	// Close releases any resources held by the synchronizer.
+	// It should be called when the synchronizer is no longer needed.
+	Close(ctx context.Context)
+}
+
+// defaultSynchronizer is the default implementation of the Synchronizer interface.
+// It manages the synchronization of a Git repository to the local filesystem,
+// handling cloning, fetching, and checking out specific references or commits.
+type defaultSynchronizer struct {
 	path           string
 	config         config.Git
 	gh             github
@@ -56,8 +80,8 @@ type Synchronizer struct {
 //
 // If provider is nil, secrets are resolved from the configuration file.
 // For external secret management backends, provide a custom SecretProvider.
-func New(path string, config config.Git, sourceName string, provider SecretProvider) *Synchronizer {
-	return &Synchronizer{
+func New(path string, config config.Git, sourceName string, provider SecretProvider) Synchronizer {
+	return &defaultSynchronizer{
 		path:           path,
 		config:         config,
 		sourceName:     sourceName,
@@ -81,7 +105,7 @@ func New(path string, config config.Git, sourceName string, provider SecretProvi
 //	provider := myorg.NewVaultSecretProvider(vaultClient)
 //	syncer := gitsync.NewFromGitConfig("/path/to/clone", gitCfg, "my-source", provider)
 //	err := syncer.Execute(ctx)
-func NewFromGitConfig(path string, gitConfig *GitConfig, sourceName string, provider SecretProvider) *Synchronizer {
+func NewFromGitConfig(path string, gitConfig *GitConfig, sourceName string, provider SecretProvider) Synchronizer {
 	cfg := config.Git{
 		Repo:      gitConfig.Repo,
 		Reference: gitConfig.Reference,
@@ -99,7 +123,7 @@ func NewFromGitConfig(path string, gitConfig *GitConfig, sourceName string, prov
 
 // Execute performs the synchronization of the configured Git repository. If the repository does not exist
 // on disk, clone it. If it does exist, pull the latest changes and rebase the local branch onto the remote branch.
-func (s *Synchronizer) Execute(ctx context.Context) error {
+func (s *defaultSynchronizer) Execute(ctx context.Context) error {
 	startTime := time.Now()
 
 	done, err := s.execute(ctx)
@@ -113,7 +137,7 @@ func (s *Synchronizer) Execute(ctx context.Context) error {
 	return nil
 }
 
-func (s *Synchronizer) execute(ctx context.Context) (bool, error) {
+func (s *defaultSynchronizer) execute(ctx context.Context) (bool, error) {
 	var repository *git.Repository
 	var fetched bool
 	if s.config.Commit == nil && s.config.Reference == nil {
@@ -231,13 +255,13 @@ func (s *Synchronizer) execute(ctx context.Context) (bool, error) {
 }
 
 // Close closes the synchronizer and releases any resources.
-func (*Synchronizer) Close(context.Context) {
+func (*defaultSynchronizer) Close(context.Context) {
 	// No resources to close.
 }
 
 // resolveConfigCredentials adapts internal config types to external gitsync types for backward compatibility.
 // This is used when SecretProvider is not configured and we fall back to config-based secret resolution.
-func (s *Synchronizer) resolveConfigCredentials(ctx context.Context) (any, error) {
+func (s *defaultSynchronizer) resolveConfigCredentials(ctx context.Context) (any, error) {
 	if s.config.Credentials == nil {
 		return nil, nil
 	}

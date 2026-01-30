@@ -8,8 +8,16 @@
 //   - Basic HTTP authentication
 //   - OIDC Client Credentials
 //
-// The primary type is Synchronizer, which manages the lifecycle of a git repository
-// clone and keeps it synchronized with the remote repository.
+// # API Design
+//
+// The package exposes interfaces rather than concrete implementations, allowing:
+//   - OCP internal code and external users to share the same stable API
+//   - External users to provide custom implementations if needed
+//   - Implementation details to evolve without breaking external consumers
+//
+// The primary interface is Synchronizer, which manages the lifecycle of a git repository
+// clone and keeps it synchronized with the remote repository. A default implementation
+// is provided and returned by the constructor functions.
 //
 // # Basic Usage
 //
@@ -85,6 +93,27 @@
 //   - Rotate credentials without modifying configuration files
 //   - Audit all secret access through their secret management system
 //   - Integrate with existing enterprise infrastructure
+//
+// # Custom Synchronizer Implementations
+//
+// For advanced use cases, external users can provide their own Synchronizer implementation:
+//
+//	type CustomSynchronizer struct {
+//	    // Custom fields
+//	}
+//
+//	func (s *CustomSynchronizer) Execute(ctx context.Context) error {
+//	    // Custom git sync logic
+//	    return nil
+//	}
+//
+//	func (s *CustomSynchronizer) Close(ctx context.Context) {
+//	    // Cleanup
+//	}
+//
+//	// Use custom synchronizer wherever gitsync.Synchronizer is expected
+//	var syncer gitsync.Synchronizer = &CustomSynchronizer{}
+//	err := syncer.Execute(ctx)
 //
 // Thread Safety: Synchronizer instances are NOT thread-safe. Each instance should
 // be used by a single goroutine. Create separate instances for concurrent operations.
