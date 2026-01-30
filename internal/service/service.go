@@ -31,7 +31,7 @@ import (
 	"github.com/open-policy-agent/opa-control-plane/internal/progress"
 	"github.com/open-policy-agent/opa-control-plane/internal/s3"
 	"github.com/open-policy-agent/opa-control-plane/internal/sqlsync"
-	"github.com/open-policy-agent/opa-control-plane/pkg/gitsync"
+	internalgitsync "github.com/open-policy-agent/opa-control-plane/internal/gitsync"
 )
 
 const (
@@ -492,7 +492,7 @@ func (src *source) SyncGit(syncs *[]Synchronizer, sourceName string, git config.
 		if reqCommit != "" {
 			git.Commit = &reqCommit
 		}
-		*syncs = append(*syncs, gitsync.New(repoDir, git, sourceName, nil))
+		*syncs = append(*syncs, internalgitsync.New(repoDir, git, sourceName, nil))
 	}
 
 	return src

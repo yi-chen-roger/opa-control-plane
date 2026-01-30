@@ -1,20 +1,7 @@
 package gitsync
 
-import "context"
+import internalgitsync "github.com/open-policy-agent/opa-control-plane/internal/gitsync"
 
-// SecretProvider abstracts the source of secrets, allowing external projects
-// to integrate with their own secret management backends (Vault, AWS Secrets Manager,
-// HashiCorp Vault, etc.).
-//
-// This interface enables:
-//   - Centralize secret management
-//   - Enforce security policies
-//   - Rotate credentials without config changes
-//   - Audit secret access
-//   - Integrate with enterprise secret management systems
-type SecretProvider interface {
-	// GetSecret retrieves a secret by name and returns a Secret interface.
-	// The returned Secret will be passed to Secret.Typed() to get the typed
-	// credential value for authentication.
-	GetSecret(ctx context.Context, name string) (Secret, error)
-}
+// SecretProvider is re-exported from internal/gitsync.
+// See internal/gitsync.SecretProvider for full documentation.
+type SecretProvider = internalgitsync.SecretProvider
